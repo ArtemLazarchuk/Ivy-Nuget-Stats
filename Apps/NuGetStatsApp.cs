@@ -57,8 +57,9 @@ public class IvyInsightsApp : ViewBase
         var refresh = this.UseRefreshToken();
         var hasAnimated = this.UseState(false);
 
-        var versionChartFromDate = this.UseState<DateTime?>(() => null);
-        var versionChartToDate = this.UseState<DateTime?>(() => null);
+        var versionChartDateRange = this.UseState<(DateOnly?, DateOnly?)>(() => (
+            DateOnly.FromDateTime(DateTime.Today.AddDays(-30)), 
+            DateOnly.FromDateTime(DateTime.Today)));
         var versionChartShowPreReleases = this.UseState(true);
         var versionChartCount = this.UseState(7);
 
@@ -79,7 +80,7 @@ public class IvyInsightsApp : ViewBase
             tags: ["database", "downloads"]);
 
         var filteredVersionChartQuery = this.UseQuery(
-            key: $"version-chart-filtered/{PackageId}/{statsQuery.Value != null}/{versionChartFromDate.Value?.ToString("yyyy-MM-dd") ?? "null"}/{versionChartToDate.Value?.ToString("yyyy-MM-dd") ?? "null"}/{versionChartShowPreReleases.Value}/{versionChartCount.Value}",
+            key: $"version-chart-filtered/{PackageId}/{statsQuery.Value != null}/{versionChartDateRange.Value.Item1?.ToString("yyyy-MM-dd") ?? "null"}/{versionChartDateRange.Value.Item2?.ToString("yyyy-MM-dd") ?? "null"}/{versionChartShowPreReleases.Value}/{versionChartCount.Value}",
             fetcher: async (CancellationToken ct) =>
             {
                 if (statsQuery.Value == null)
@@ -89,15 +90,15 @@ public class IvyInsightsApp : ViewBase
                 var count = Math.Clamp(versionChartCount.Value, 2, 20);
                 var filteredVersions = s.Versions.AsEnumerable();
                 
-                if (versionChartFromDate.Value.HasValue)
+                if (versionChartDateRange.Value.Item1.HasValue)
                 {
-                    var fromDate = versionChartFromDate.Value.Value.Date;
+                    var fromDate = versionChartDateRange.Value.Item1.Value.ToDateTime(TimeOnly.MinValue);
                     filteredVersions = filteredVersions.Where(v => 
                         v.Published.HasValue && v.Published.Value.Date >= fromDate);
                 }
-                if (versionChartToDate.Value.HasValue)
+                if (versionChartDateRange.Value.Item2.HasValue)
                 {
-                    var toDate = versionChartToDate.Value.Value.Date.AddDays(1);
+                    var toDate = versionChartDateRange.Value.Item2.Value.ToDateTime(TimeOnly.MinValue).AddDays(1);
                     filteredVersions = filteredVersions.Where(v => 
                         v.Published.HasValue && v.Published.Value.Date < toDate);
                 }
@@ -399,8 +400,9 @@ public class IvyInsightsApp : ViewBase
                 | Layout.Horizontal().Gap(2)
                     | Text.H4("Recent Versions Distribution")
                 | (Layout.Horizontal().Gap(2).Align(Align.Center)
-                    | versionChartFromDate.ToDateInput().WithField()
-                    | versionChartToDate.ToDateInput().WithField()
+                    | versionChartDateRange.ToDateRangeInput()
+                        .Format("MMM dd, yyyy")
+                        .Placeholder("Select date range")
                     | new Button(versionChartShowPreReleases.Value ? "With Pre-releases" : "Releases Only")
                         .Outline()
                         .Icon(Icons.ChevronDown)
