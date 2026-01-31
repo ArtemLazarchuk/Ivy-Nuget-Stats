@@ -530,7 +530,7 @@ public class IvyInsightsApp : ViewBase
 
         var versionsTable = allVersionsTable.AsQueryable()
             .ToDataTable()
-            .Height(Size.Units(150))
+            .Height(Size.Units(145))
             .Header(v => v.Version, "Version")
             .Header(v => v.Published, "Published")
             .Header(v => v.Downloads, "Downloads")
