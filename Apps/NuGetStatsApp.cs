@@ -370,11 +370,11 @@ public class IvyInsightsApp : ViewBase
             ? new Card(
                 Layout.Vertical().Gap(3).Padding(3)
                     | topVersionsChart
-            ).Title("Top Popular Versions (Last 30 Days)").Icon(Icons.Star).Height(Size.Full())
+            ).Title("Top Popular Versions (Last 30 Days)").Icon(Icons.Crown).Height(Size.Full())
             : new Card(
                 Layout.Vertical().Gap(3).Padding(3).Align(Align.Center)
                     | Text.Block("No versions released in the last 30 days").Muted()
-            ).Title("Top Popular Versions (Last 30 Days)").Icon(Icons.Star).Height(Size.Full());
+            ).Title("Top Popular Versions (Last 30 Days)").Icon(Icons.Crown).Height(Size.Full());
 
         var percentDiff = avgMonthlyDownloads > 0
             ? Math.Round(((downloadsThisMonth - avgMonthlyDownloads) / avgMonthlyDownloads) * 100, 1)
@@ -399,7 +399,7 @@ public class IvyInsightsApp : ViewBase
                     ? dailyDownloadsChart
                     : Text.Block("No data available for the last month").Muted())
         ).Title("Daily Downloads (Last 30 Days)")
-         .Icon(isGrowing ? Icons.TrendingUp : Icons.TrendingDown)
+         .Icon(Icons.ChartNoAxesCombined)
          .Height(Size.Full());
 
 
@@ -413,8 +413,6 @@ public class IvyInsightsApp : ViewBase
 
         var versionChartCard = new Card(
             Layout.Vertical().Gap(3).Padding(3)
-                | Layout.Horizontal().Gap(2)
-                    | Text.H4("Recent Versions Distribution")
                 | (Layout.Horizontal().Gap(2).Align(Align.Center)
                     | versionChartDateRange.ToDateRangeInput()
                         .Format("MMM dd, yyyy")
@@ -433,7 +431,7 @@ public class IvyInsightsApp : ViewBase
                 | (versionChart != null
                     ? versionChart
                     : Text.Block("No versions found").Muted())
-        );
+        ).Title("Recent Versions Distribution").Icon(Icons.ChartBar);
 
         var starsStats = starsStatsQuery.Value ?? new List<GithubStarsStats>();
         
@@ -455,11 +453,10 @@ public class IvyInsightsApp : ViewBase
 
         var githubStarsCard = new Card(
             Layout.Vertical().Gap(3).Padding(3)
-                | Text.H4("GitHub Stars (Last 30 Days)")
                 | (starsChart != null 
                     ? starsChart 
                     : (object)Text.Block("No data available").Muted())
-        );
+        ).Title("GitHub Stars (Last 30 Days)").Icon(Icons.Github);
 
         // Calculate historical weekly growth for the chart
         var growthWeeks = new List<string>();
@@ -520,7 +517,7 @@ public class IvyInsightsApp : ViewBase
                 | (weeklyGrowthChart != null 
                     ? weeklyGrowthChart 
                     : (object)Text.Block("No history available").Muted())
-            ).Title("Weekly Growth (WoW %)");
+            ).Title("Weekly Growth (WoW %)").Icon(Icons.Activity);
 
         var allVersionsTable = s.Versions
             .Select(v => new
@@ -546,9 +543,8 @@ public class IvyInsightsApp : ViewBase
 
         var versionsTableCard = new Card(
             Layout.Vertical().Gap(3).Padding(3)
-                | Text.H4($"All Versions ({allVersionsTable.Count})")
                 | versionsTable
-        ).Width(Size.Fraction(0.6f));
+        ).Title($"All Versions ({allVersionsTable.Count})").Icon(Icons.List).Width(Size.Fraction(0.6f));
 
         return Layout.Vertical().Gap(4).Padding(4).Align(Align.TopCenter)
             | metrics.Width(Size.Fraction(0.9f))
