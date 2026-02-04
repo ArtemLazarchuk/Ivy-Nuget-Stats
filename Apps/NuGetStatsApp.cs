@@ -327,9 +327,9 @@ public class IvyInsightsApp : ViewBase
             | new Card(
                 Layout.Vertical().Gap(2).Padding(3).Align(Align.Center)
                     | Text.H2(animatedVersions.Value.ToString("N0")).Bold()
-                    | (versionsThisMonth > 0
-                        ? Text.Block($"+{versionsThisMonth} this month").Muted()
-                        : null)
+                    | Text.Block(versionsThisMonth > 0
+                        ? $"+{versionsThisMonth} this month"
+                        : "0 versions released this month").Muted()
             ).Title("Total Versions").Icon(Icons.Tag)
             | new Card(
                 Layout.Vertical().Gap(2).Padding(3).Align(Align.Center)
