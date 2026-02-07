@@ -94,6 +94,21 @@ public class IvyInsightsApp : ViewBase
             },
             tags: ["database", "stars"]);
 
+        var totalDownloadsStatsQuery = this.UseQuery(
+            key: "total-downloads-stats-365",
+            fetcher: async (CancellationToken ct) =>
+            {
+                return await dbService.GetDailyDownloadStatsAsync(365, ct);
+            },
+            options: new QueryOptions
+            {
+                Scope = QueryScope.Server,
+                Expiration = TimeSpan.FromMinutes(5),
+                KeepPrevious = true,
+                RevalidateOnMount = true
+            },
+            tags: ["database", "downloads", "total"]);
+
         var filteredVersionChartQuery = this.UseQuery(
             key: $"version-chart-filtered/{PackageId}/{statsQuery.Value != null}/{versionChartDateRange.Value.Item1?.ToString("yyyy-MM-dd") ?? "null"}/{versionChartDateRange.Value.Item2?.ToString("yyyy-MM-dd") ?? "null"}/{versionChartShowPreReleases.Value}/{versionChartCount.Value}",
             fetcher: (CancellationToken ct) =>
@@ -482,6 +497,31 @@ public class IvyInsightsApp : ViewBase
                     : (object)Text.Block("No data available").Muted())
         ).Title("GitHub Stars (Last 365 Days)").Icon(Icons.Github);
 
+        var totalDownloadsStats = totalDownloadsStatsQuery.Value ?? new List<DailyDownloadStats>();
+        
+        var totalDownloadsChartData = totalDownloadsStats
+            .OrderBy(d => d.Date)
+            .Select(d => new 
+            { 
+                Date = d.Date.ToString("MMM dd"), 
+                TotalDownloads = (double)d.TotalDownloads 
+            })
+            .ToList();
+
+        var totalDownloadsChart = totalDownloadsChartData.Count > 0
+            ? totalDownloadsChartData.ToLineChart(
+                dimension: e => e.Date,
+                measures: [e => e.First().TotalDownloads],
+                LineChartStyles.Dashboard)
+            : null;
+
+        var totalDownloadsCard = new Card(
+            Layout.Vertical().Gap(3).Padding(3)
+                | (totalDownloadsChart != null 
+                    ? totalDownloadsChart 
+                    : (object)Text.Block("No data available").Muted())
+        ).Title("Total Downloads (Last 365 Days)").Icon(Icons.Download);
+
         // Calculate historical weekly growth for the chart
         var growthWeeks = new List<string>();
         var growthValues = new List<double>();
@@ -580,6 +620,7 @@ public class IvyInsightsApp : ViewBase
                 | versionsTableCard
                 | (Layout.Vertical().Width(Size.Full())
                     | versionChartCard
-                    | githubStarsCard ));
+                    | githubStarsCard
+                    | totalDownloadsCard ));
     }
 }
