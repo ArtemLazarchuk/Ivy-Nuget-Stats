@@ -222,8 +222,14 @@ jobs:
                   ALTER TABLE github_stargazers
                   ADD COLUMN IF NOT EXISTS unstarred_at TIMESTAMPTZ;
               """)
+              
+              # Add column for star duration (days between starred_at and unstarred_at)
+              cur.execute("""
+                  ALTER TABLE github_stargazers
+                  ADD COLUMN IF NOT EXISTS star_duration_days NUMERIC;
+              """)
 
-              # Daily aggregation table for stargazers changes
+              # Daily aggregation table for stargazers changes (counts only)
               cur.execute("""
                   CREATE TABLE IF NOT EXISTS github_stargazers_daily (
                       id SERIAL PRIMARY KEY,
@@ -264,6 +270,7 @@ jobs:
 
               # Reactivate users who were in the table before but had unstarred
               reactivate_count = 0
+              reactivated_logins = []
               for login in current_active:
                   cur.execute("""
                       UPDATE github_stargazers
@@ -272,20 +279,45 @@ jobs:
                   """, (REPO, login))
                   if cur.rowcount > 0:
                       reactivate_count += 1
+                      reactivated_logins.append(login)
 
               # Mark as unstarred those who are no longer in the current list
+              # and calculate duration between starred_at and unstarred_at
               now_utc = datetime.now(timezone.utc)
               left_count = 0
+              star_durations = {}
+              
               for login in left_logins:
+                  # Get starred_at to calculate duration
                   cur.execute("""
-                      UPDATE github_stargazers
-                      SET unstarred_at = %s
+                      SELECT starred_at FROM github_stargazers
                       WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
-                  """, (now_utc, REPO, login))
+                  """, (REPO, login))
+                  row = cur.fetchone()
+                  
+                  if row and row[0]:
+                      starred_at = row[0]
+                      if isinstance(starred_at, str):
+                          starred_at = datetime.fromisoformat(starred_at.replace('Z', '+00:00'))
+                      duration_days = (now_utc - starred_at).total_seconds() / 86400
+                      star_durations[login] = duration_days
+                      
+                      cur.execute("""
+                          UPDATE github_stargazers
+                          SET unstarred_at = %s, star_duration_days = %s
+                          WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
+                      """, (now_utc, duration_days, REPO, login))
+                  else:
+                      cur.execute("""
+                          UPDATE github_stargazers
+                          SET unstarred_at = %s
+                          WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
+                      """, (now_utc, REPO, login))
+                  
                   if cur.rowcount > 0:
                       left_count += 1
 
-              # Save daily aggregation
+              # Save daily aggregation (for charts: new vs unstar vs reactivated counts)
               date_to_record = date.today().isoformat()
               cur.execute("""
                   INSERT INTO github_stargazers_daily (repo_name, date, new_count, unstar_count, reactivated_count)
@@ -314,9 +346,18 @@ jobs:
               if left_logins:
                   print("Users who unstarred since last run:")
                   for login in left_logins:
-                      print(f"  - {login}")
+                      duration = star_durations.get(login)
+                      if duration is not None:
+                          print(f"  - {login} (used for {duration:.1f} days)")
+                      else:
+                          print(f"  - {login}")
               else:
                   print("No users unstarred since last run.")
+
+              if reactivated_logins:
+                  print("Users who re-starred since last run:")
+                  for login in sorted(reactivated_logins):
+                      print(f"  * {login}")
           except Exception as e:
               print(f"Database error while updating stargazers: {e}")
               raise SystemExit(1)
