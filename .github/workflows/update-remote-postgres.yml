@@ -204,7 +204,7 @@ jobs:
               conn = psycopg2.connect(os.getenv("DB_URL"))
               cur = conn.cursor()
           
-              # Table with one row per user who has ever starred the repo
+              # Setup tables
               cur.execute("""
                   CREATE TABLE IF NOT EXISTS github_stargazers (
                       id SERIAL PRIMARY KEY,
@@ -213,24 +213,12 @@ jobs:
                       starred_at TIMESTAMPTZ,
                       first_seen DATE DEFAULT CURRENT_DATE,
                       unstarred_at TIMESTAMPTZ,
+                      star_duration_days NUMERIC,
                       UNIQUE(repo_name, user_login)
                   );
-              """)
-
-              # Make sure the unstarred_at column exists on older installations
-              cur.execute("""
-                  ALTER TABLE github_stargazers
-                  ADD COLUMN IF NOT EXISTS unstarred_at TIMESTAMPTZ;
-              """)
-              
-              # Add column for star duration (days between starred_at and unstarred_at)
-              cur.execute("""
-                  ALTER TABLE github_stargazers
-                  ADD COLUMN IF NOT EXISTS star_duration_days NUMERIC;
-              """)
-
-              # Daily aggregation table for stargazers changes (counts only)
-              cur.execute("""
+                  ALTER TABLE github_stargazers ADD COLUMN IF NOT EXISTS unstarred_at TIMESTAMPTZ;
+                  ALTER TABLE github_stargazers ADD COLUMN IF NOT EXISTS star_duration_days NUMERIC;
+                  
                   CREATE TABLE IF NOT EXISTS github_stargazers_daily (
                       id SERIAL PRIMARY KEY,
                       repo_name TEXT,
@@ -242,53 +230,44 @@ jobs:
                   );
               """)
 
-              # Previous state of active stargazers (unstarred_at IS NULL)
+              # Get previous state
               cur.execute("""
-                  SELECT user_login
-                  FROM github_stargazers
+                  SELECT user_login FROM github_stargazers
                   WHERE repo_name = %s AND unstarred_at IS NULL;
               """, (REPO,))
-              rows = cur.fetchall()
-              previously_active = {row[0] for row in rows}
-
+              previously_active = {row[0] for row in cur.fetchall()}
               current_active = {login for login, _ in stargazers}
-
               joined_logins = sorted(current_active - previously_active)
               left_logins = sorted(previously_active - current_active)
           
-              insert_query = """
-                  INSERT INTO github_stargazers (repo_name, user_login, starred_at)
-                  VALUES (%s, %s, %s)
-                  ON CONFLICT (repo_name, user_login) DO NOTHING;
-              """
-          
+              # Insert new stargazers
               new_count = 0
               for login, starred_at in stargazers:
-                  cur.execute(insert_query, (REPO, login, starred_at))
+                  cur.execute("""
+                      INSERT INTO github_stargazers (repo_name, user_login, starred_at)
+                      VALUES (%s, %s, %s) ON CONFLICT (repo_name, user_login) DO NOTHING;
+                  """, (REPO, login, starred_at))
                   if cur.rowcount > 0:
                       new_count += 1
 
-              # Reactivate users who were in the table before but had unstarred
+              # Reactivate users
               reactivate_count = 0
               reactivated_logins = []
               for login in current_active:
                   cur.execute("""
-                      UPDATE github_stargazers
-                      SET unstarred_at = NULL
+                      UPDATE github_stargazers SET unstarred_at = NULL
                       WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NOT NULL;
                   """, (REPO, login))
                   if cur.rowcount > 0:
                       reactivate_count += 1
                       reactivated_logins.append(login)
 
-              # Mark as unstarred those who are no longer in the current list
-              # and calculate duration between starred_at and unstarred_at
+              # Mark unstarred and calculate duration
               now_utc = datetime.now(timezone.utc)
               left_count = 0
               star_durations = {}
               
               for login in left_logins:
-                  # Get starred_at to calculate duration
                   cur.execute("""
                       SELECT starred_at FROM github_stargazers
                       WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
@@ -296,34 +275,43 @@ jobs:
                   row = cur.fetchone()
                   
                   if row and row[0]:
-                      starred_at = row[0]
-                      if isinstance(starred_at, str):
-                          starred_at = datetime.fromisoformat(starred_at.replace('Z', '+00:00'))
-                      duration_days = (now_utc - starred_at).total_seconds() / 86400
-                      star_durations[login] = duration_days
-                      
-                      cur.execute("""
-                          UPDATE github_stargazers
-                          SET unstarred_at = %s, star_duration_days = %s
-                          WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
-                      """, (now_utc, duration_days, REPO, login))
+                      try:
+                          starred_at = row[0]
+                          if starred_at.tzinfo is None:
+                              starred_at = starred_at.replace(tzinfo=timezone.utc)
+                          duration_days = (now_utc - starred_at).total_seconds() / 86400
+                          if duration_days >= 0:
+                              star_durations[login] = duration_days
+                              cur.execute("""
+                                  UPDATE github_stargazers
+                                  SET unstarred_at = %s, star_duration_days = %s
+                                  WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
+                              """, (now_utc, duration_days, REPO, login))
+                          else:
+                              cur.execute("""
+                                  UPDATE github_stargazers SET unstarred_at = %s
+                                  WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
+                              """, (now_utc, REPO, login))
+                      except Exception:
+                          cur.execute("""
+                              UPDATE github_stargazers SET unstarred_at = %s
+                              WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
+                          """, (now_utc, REPO, login))
                   else:
                       cur.execute("""
-                          UPDATE github_stargazers
-                          SET unstarred_at = %s
+                          UPDATE github_stargazers SET unstarred_at = %s
                           WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
                       """, (now_utc, REPO, login))
                   
                   if cur.rowcount > 0:
                       left_count += 1
 
-              # Save daily aggregation (for charts: new vs unstar vs reactivated counts)
+              # Save daily aggregation
               date_to_record = date.today().isoformat()
               cur.execute("""
                   INSERT INTO github_stargazers_daily (repo_name, date, new_count, unstar_count, reactivated_count)
                   VALUES (%s, %s, %s, %s, %s)
-                  ON CONFLICT (repo_name, date)
-                  DO UPDATE SET
+                  ON CONFLICT (repo_name, date) DO UPDATE SET
                       new_count = github_stargazers_daily.new_count + EXCLUDED.new_count,
                       unstar_count = github_stargazers_daily.unstar_count + EXCLUDED.unstar_count,
                       reactivated_count = github_stargazers_daily.reactivated_count + EXCLUDED.reactivated_count;
@@ -348,8 +336,7 @@ jobs:
                   for login in left_logins:
                       duration = star_durations.get(login)
                       if duration is not None:
-                          days = int(round(duration))
-                          print(f"  - {login} (used for {days} days)")
+                          print(f"  - {login} (used for {int(round(duration))} days)")
                       else:
                           print(f"  - {login}")
               else:
