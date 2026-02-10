@@ -134,6 +134,7 @@ jobs:
 
   update_github_stargazers:
     runs-on: ubuntu-latest
+    needs: update_github_stats
     steps:
       - name: Install DB driver
         run: |
@@ -148,43 +149,43 @@ jobs:
           import os
           import requests
           import psycopg2
-          from datetime import date
-
+          from datetime import date, datetime, timezone
+          
           REPO = "Ivy-Interactive/Ivy-Framework"
-
+          
           def fetch_all_stargazers():
               stargazers = []
               page = 1
-
+          
               headers = {
                   "Accept": "application/vnd.github.star+json",
                   "User-Agent": "ivy-nuget-stats-stargazers-script"
               }
-
+          
               while True:
                   url = f"https://api.github.com/repos/{REPO}/stargazers"
                   params = {"per_page": 100, "page": page}
                   resp = requests.get(url, headers=headers, params=params)
-
+          
                   if resp.status_code != 200:
                       print(f"Error fetching stargazers (status {resp.status_code}): {resp.text}")
                       raise SystemExit(1)
-
+          
                   data = resp.json()
                   if not data:
                       break
-
+          
                   for item in data:
                       user = item.get("user", {})
                       login = user.get("login")
                       starred_at = item.get("starred_at")
                       if login:
                           stargazers.append((login, starred_at))
-
+          
                   page += 1
-
+          
               return stargazers
-
+          
           try:
               stargazers = fetch_all_stargazers()
           except SystemExit:
@@ -192,17 +193,17 @@ jobs:
           except Exception as e:
               print(f"Unexpected error fetching stargazers: {e}")
               raise SystemExit(1)
-
+          
           print(f"Fetched {len(stargazers)} stargazers for {REPO}.")
-
+          
           if not stargazers:
               print("No stargazers returned; nothing to update.")
               raise SystemExit(0)
-
+          
           try:
               conn = psycopg2.connect(os.getenv("DB_URL"))
               cur = conn.cursor()
-
+          
               # Table with one row per user who has ever starred the repo
               cur.execute("""
                   CREATE TABLE IF NOT EXISTS github_stargazers (
@@ -211,27 +212,111 @@ jobs:
                       user_login TEXT,
                       starred_at TIMESTAMPTZ,
                       first_seen DATE DEFAULT CURRENT_DATE,
+                      unstarred_at TIMESTAMPTZ,
                       UNIQUE(repo_name, user_login)
                   );
               """)
 
+              # Make sure the unstarred_at column exists on older installations
+              cur.execute("""
+                  ALTER TABLE github_stargazers
+                  ADD COLUMN IF NOT EXISTS unstarred_at TIMESTAMPTZ;
+              """)
+
+              # Daily aggregation table for stargazers changes
+              cur.execute("""
+                  CREATE TABLE IF NOT EXISTS github_stargazers_daily (
+                      id SERIAL PRIMARY KEY,
+                      repo_name TEXT,
+                      date DATE DEFAULT CURRENT_DATE,
+                      new_count INTEGER DEFAULT 0,
+                      unstar_count INTEGER DEFAULT 0,
+                      reactivated_count INTEGER DEFAULT 0,
+                      UNIQUE(repo_name, date)
+                  );
+              """)
+
+              # Previous state of active stargazers (unstarred_at IS NULL)
+              cur.execute("""
+                  SELECT user_login
+                  FROM github_stargazers
+                  WHERE repo_name = %s AND unstarred_at IS NULL;
+              """, (REPO,))
+              rows = cur.fetchall()
+              previously_active = {row[0] for row in rows}
+
+              current_active = {login for login, _ in stargazers}
+
+              joined_logins = sorted(current_active - previously_active)
+              left_logins = sorted(previously_active - current_active)
+          
               insert_query = """
                   INSERT INTO github_stargazers (repo_name, user_login, starred_at)
                   VALUES (%s, %s, %s)
                   ON CONFLICT (repo_name, user_login) DO NOTHING;
               """
-
+          
               new_count = 0
               for login, starred_at in stargazers:
                   cur.execute(insert_query, (REPO, login, starred_at))
                   if cur.rowcount > 0:
                       new_count += 1
 
+              # Reactivate users who were in the table before but had unstarred
+              reactivate_count = 0
+              for login in current_active:
+                  cur.execute("""
+                      UPDATE github_stargazers
+                      SET unstarred_at = NULL
+                      WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NOT NULL;
+                  """, (REPO, login))
+                  if cur.rowcount > 0:
+                      reactivate_count += 1
+
+              # Mark as unstarred those who are no longer in the current list
+              now_utc = datetime.now(timezone.utc)
+              left_count = 0
+              for login in left_logins:
+                  cur.execute("""
+                      UPDATE github_stargazers
+                      SET unstarred_at = %s
+                      WHERE repo_name = %s AND user_login = %s AND unstarred_at IS NULL;
+                  """, (now_utc, REPO, login))
+                  if cur.rowcount > 0:
+                      left_count += 1
+
+              # Save daily aggregation
+              date_to_record = date.today().isoformat()
+              cur.execute("""
+                  INSERT INTO github_stargazers_daily (repo_name, date, new_count, unstar_count, reactivated_count)
+                  VALUES (%s, %s, %s, %s, %s)
+                  ON CONFLICT (repo_name, date)
+                  DO UPDATE SET
+                      new_count = github_stargazers_daily.new_count + EXCLUDED.new_count,
+                      unstar_count = github_stargazers_daily.unstar_count + EXCLUDED.unstar_count,
+                      reactivated_count = github_stargazers_daily.reactivated_count + EXCLUDED.reactivated_count;
+              """, (REPO, date_to_record, new_count, left_count, reactivate_count))
+          
               conn.commit()
               cur.close()
               conn.close()
+          
+              print(f"Stargazers update complete. New: {new_count}, Unstarred: {left_count}, Reactivated: {reactivate_count}. Total fetched: {len(stargazers)}.")
+              print(f"Daily aggregation saved: date={date_to_record}, new={new_count}, unstar={left_count}, reactivated={reactivate_count}")
 
-              print(f"Stargazers update complete. New users inserted: {new_count}. Total processed: {len(stargazers)}.")
+              if joined_logins:
+                  print("New stargazers since last run:")
+                  for login in joined_logins:
+                      print(f"  + {login}")
+              else:
+                  print("No new stargazers since last run.")
+
+              if left_logins:
+                  print("Users who unstarred since last run:")
+                  for login in left_logins:
+                      print(f"  - {login}")
+              else:
+                  print("No users unstarred since last run.")
           except Exception as e:
               print(f"Database error while updating stargazers: {e}")
               raise SystemExit(1)
