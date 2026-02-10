@@ -348,7 +348,8 @@ jobs:
                   for login in left_logins:
                       duration = star_durations.get(login)
                       if duration is not None:
-                          print(f"  - {login} (used for {duration:.1f} days)")
+                          days = int(round(duration))
+                          print(f"  - {login} (used for {days} days)")
                       else:
                           print(f"  - {login}")
               else:
