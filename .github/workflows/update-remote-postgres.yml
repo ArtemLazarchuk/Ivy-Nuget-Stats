@@ -177,8 +177,9 @@ jobs:
                       user = item.get("user") or {}
                       login = user.get("login")
                       starred_at = item.get("starred_at")
+                      account_type = user.get("type", "User")
                       if login:
-                          result.append((login, starred_at))
+                          result.append((login, starred_at, account_type))
                   
                   page += 1
               
@@ -197,9 +198,10 @@ jobs:
               raise SystemExit(0)
           
           # Current active stargazers as a set of logins
-          current = {login for login, _ in stargazers}
-          # Map login -> starred_at from GitHub API (when we first see them)
-          starred_at_map = {login: starred_at for login, starred_at in stargazers}
+          current = {login for login, _, _ in stargazers}
+          # Map login -> starred_at and account_type from GitHub API
+          starred_at_map = {login: starred_at for login, starred_at, _ in stargazers}
+          account_type_map = {login: account_type for login, _, account_type in stargazers}
           
           try:
               conn = psycopg2.connect(os.getenv("DB_URL"))
@@ -216,6 +218,7 @@ jobs:
                   );
                   ALTER TABLE github_stargazers ADD COLUMN IF NOT EXISTS starred_at TIMESTAMPTZ;
                   ALTER TABLE github_stargazers ADD COLUMN IF NOT EXISTS unstarred_at TIMESTAMPTZ;
+                  ALTER TABLE github_stargazers ADD COLUMN IF NOT EXISTS account_type TEXT;
                   
                   CREATE TABLE IF NOT EXISTS github_stargazers_daily (
                       repo_name TEXT,
@@ -238,25 +241,27 @@ jobs:
               new_users = current - previous
               lost_users = previous - current
               
-              # Backfill starred_at for any existing active users that don't have it yet
-              for login, starred_at in stargazers:
+              # Backfill starred_at and account_type for any existing users that don't have it yet
+              for login, starred_at, account_type in stargazers:
                   if not starred_at:
                       continue
                   cur.execute("""
                       UPDATE github_stargazers
-                      SET starred_at = COALESCE(starred_at, %s)
+                      SET starred_at = COALESCE(starred_at, %s),
+                          account_type = COALESCE(account_type, %s)
                       WHERE repo_name = %s AND user_login = %s;
-                  """, (starred_at, REPO, login))
+                  """, (starred_at, account_type, REPO, login))
               
-              # Insert new users with their first starred_at
+              # Insert new users with their first starred_at and account_type
               for login in new_users:
                   starred_at = starred_at_map.get(login)
+                  account_type = account_type_map.get(login, "User")
                   cur.execute("""
-                      INSERT INTO github_stargazers (repo_name, user_login, starred_at, unstarred_at)
-                      VALUES (%s, %s, %s, NULL)
+                      INSERT INTO github_stargazers (repo_name, user_login, starred_at, unstarred_at, account_type)
+                      VALUES (%s, %s, %s, NULL, %s)
                       ON CONFLICT (repo_name, user_login)
                       DO NOTHING;
-                  """, (REPO, login, starred_at))
+                  """, (REPO, login, starred_at, account_type))
 
               # Reactivate users (do NOT touch starred_at so it stays as "first joined")
               reactivate_count = 0
