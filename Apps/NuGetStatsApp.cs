@@ -275,8 +275,7 @@ public class IvyInsightsApp : ViewBase
                     | new Skeleton().Height(Size.Units(50))
                     | new Skeleton().Height(Size.Units(50))
                     | new Skeleton().Height(Size.Units(50)))
-                | (Layout.Grid().Columns(4).Width(Size.Fraction(0.9f))
-                    | new Skeleton().Height(Size.Units(80))
+                | (Layout.Grid().Columns(3).Width(Size.Fraction(0.9f))
                     | new Skeleton().Height(Size.Units(80))
                     | new Skeleton().Height(Size.Units(80))
                     | new Skeleton().Height(Size.Units(80)))
@@ -927,9 +926,9 @@ public class IvyInsightsApp : ViewBase
 
         return Layout.Vertical().AlignContent(Align.TopCenter)
             | metrics.Width(Size.Fraction(0.9f))
-            | (Layout.Grid().Columns(4).Width(Size.Fraction(0.9f))
+            | (Layout.Grid().Columns(3).Width(Size.Fraction(0.9f))
                 | adoptionCard
-                | monthlyDownloadsCard
+                // | monthlyDownloadsCard
                 | dailyActivityCard
                 | weeklyGrowthCard)
             | (Layout.Horizontal().Width(Size.Fraction(0.9f)).Height(Size.Units(140))
