@@ -1,5 +1,10 @@
 # Ivy Insights - NuGet Statistics Dashboard
 
+## Repository Migration
+
+This project has been moved to the Ivy Examples repository and is now located here:
+
+https://github.com/Ivy-Interactive/Ivy-Examples/tree/development/project-demos/ivy-nuget-stats
 ## Description
 
 Ivy Insights is a comprehensive web application for visualizing and analyzing NuGet package statistics. It displays real-time data about package versions, downloads, releases, and trends with interactive charts, animated metrics, and detailed analytics. Built specifically for monitoring the Ivy framework package, but can be easily adapted for any NuGet package.
